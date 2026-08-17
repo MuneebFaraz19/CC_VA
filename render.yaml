@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: voice-ai-patient-registration
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        value: sqlite:///./patients.db
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
+      - key: VAPI_API_KEY
+        sync: false
+      - key: VAPI_ASSISTANT_ID
+        sync: false
+      - key: VAPI_PHONE_NUMBER_ID
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: LOG_LEVEL
+        value: info
+    disk:
+      name: sqlite-data
+      mountPath: /opt/render
+      sizeGB: 1
