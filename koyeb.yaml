@@ -1,0 +1,20 @@
+# Koyeb deployment configuration
+# Deploy at https://app.koyeb.com → Create Service → GitHub → select CC_VA repo
+
+services:
+  - name: voice-ai-patient-registration
+    path: /
+    port: 8000
+    env:
+      - key: DATABASE_URL
+        value: sqlite:///./patients.db
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
+      - key: LOG_LEVEL
+        value: info
+      # Set these in Koyeb dashboard (secrets):
+      - key: GROQ_API_KEY
+      - key: VAPI_API_KEY
+      - key: VAPI_ASSISTANT_ID
+      - key: VAPI_PHONE_NUMBER_ID
+      - key: PUBLIC_BASE_URL
