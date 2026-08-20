@@ -174,6 +174,14 @@ def main() -> None:
         sys.exit(1)
 
     webhook_url = f"{settings.public_base_url}/vapi/webhook"
+    if "localhost" in webhook_url or "127.0.0.1" in webhook_url:
+        logger.warning(
+            "PUBLIC_BASE_URL is localhost (%s) — skipping assistant update to avoid "
+            "overwriting the production webhook URL. Set PUBLIC_BASE_URL to your "
+            "public URL (e.g. https://cc-va.onrender.com) to update the assistant.",
+            settings.public_base_url,
+        )
+        return
     logger.info("Webhook URL: %s", webhook_url)
 
     # If VAPI_ASSISTANT_ID is set, update the existing assistant instead of creating a new one
