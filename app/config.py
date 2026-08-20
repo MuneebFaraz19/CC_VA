@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     vapi_api_key: str = ""
     vapi_assistant_id: str = ""
     vapi_phone_number_id: str = ""
+    vapi_webhook_secret: str = ""
     public_base_url: str = "http://localhost:8000"
 
     # Server

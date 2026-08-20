@@ -10,12 +10,14 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.database import get_db
 from app.schemas import Envelope, PatientCreate, PatientUpdate
 from app.services import PatientService, CallService, AppointmentService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/vapi", tags=["vapi"])
+_settings = get_settings()
 
 
 def _ok(data: Any, status_code: int = 200) -> Response:
@@ -84,6 +86,21 @@ async def vapi_webhook(request: Request, db: Session = Depends(get_db)):
     except Exception:
         return _err("Invalid JSON body", 400)
 
+    # Verify webhook HMAC signature if a secret is configured
+    if _settings.vapi_webhook_secret:
+        signature = request.headers.get("x-vapi-signature", "")
+        raw_body = await request.body()
+        import hmac
+        import hashlib
+        expected = hmac.new(
+            _settings.vapi_webhook_secret.encode(),
+            raw_body,
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            logger.warning("Webhook signature mismatch — rejecting request")
+            return _err("Invalid webhook signature", 401)
+
     logger.info("Vapi webhook received: %s", json.dumps(body, default=str)[:2000])
 
     msg_type = body.get("message", {}).get("type") or body.get("type", "")
@@ -105,8 +122,15 @@ async def vapi_webhook(request: Request, db: Session = Depends(get_db)):
         call_svc = CallService(db)
         # Find existing call by vapi_call_id or create one
         vapi_id = info["vapi_call_id"]
-        transcript = body.get("transcript", "")
-        summary = body.get("summary", "")
+        # Vapi nests transcript/summary under message, with fallback to top-level
+        msg = body.get("message", {})
+        transcript = msg.get("transcript") or body.get("transcript", "")
+        summary = msg.get("summary") or body.get("summary", "")
+        # Vapi may also send artifact or ordered transcripts
+        if not transcript:
+            artifact = body.get("artifact") or msg.get("artifact")
+            if artifact and isinstance(artifact, dict):
+                transcript = artifact.get("transcript", "")
         # Try to find the call
         from sqlalchemy import select
         from app.models import CallLog
@@ -139,10 +163,11 @@ async def vapi_webhook(request: Request, db: Session = Depends(get_db)):
         return _err("Invalid tool call arguments", 400)
 
     tool_call_id = tool_call.get("id", "")
+    call_info = _extract_call_info(body)
 
     # ── registerPatient ──────────────────────────────
     if func_name == "registerPatient":
-        return _handle_register(func_args, tool_call_id, db)
+        return _handle_register(func_args, tool_call_id, db, call_info)
 
     # ── updatePatient ────────────────────────────────
     if func_name == "updatePatient":
@@ -155,7 +180,7 @@ async def vapi_webhook(request: Request, db: Session = Depends(get_db)):
     return _err(f"Unknown function: {func_name}", 400)
 
 
-def _handle_register(func_args: dict, tool_call_id: str, db: Session) -> Response:
+def _handle_register(func_args: dict, tool_call_id: str, db: Session, call_info: dict | None = None) -> Response:
     """Process registerPatient tool call."""
     try:
         # Convert DOB format
@@ -187,6 +212,17 @@ def _handle_register(func_args: dict, tool_call_id: str, db: Session) -> Respons
         # Validate and create
         data = PatientCreate(**func_args)
         patient = patient_svc.create_patient(data)
+
+        # Link this patient to the call log if we have a vapi_call_id
+        if call_info and call_info.get("vapi_call_id"):
+            vapi_id = call_info["vapi_call_id"]
+            from sqlalchemy import select
+            from app.models import CallLog
+            stmt = select(CallLog).where(CallLog.vapi_call_id == vapi_id)
+            existing_call = db.execute(stmt).scalars().first()
+            if existing_call:
+                call_svc = CallService(db)
+                call_svc.update_call(existing_call.call_id, patient_id=patient.patient_id)
 
         # Log the collected data to stdout (observability requirement)
         logger.info("Patient registered via voice agent: %s", json.dumps({

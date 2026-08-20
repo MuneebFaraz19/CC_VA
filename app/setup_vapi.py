@@ -41,6 +41,8 @@ def create_assistant(api_key: str, webhook_url: str) -> dict:
             "provider": "deepgram",
             "model": "nova-2",
             "language": "en-US",
+            "endpointing": 200,          # ms — detect end-of-speech faster for quicker barge-in
+            "profanityFilter": False,
         },
         "model": {
             "provider": "groq",
@@ -52,20 +54,24 @@ def create_assistant(api_key: str, webhook_url: str) -> dict:
                 }
             ],
             "tools": ALL_TOOLS,
-            "temperature": 0.3,
-            "maxTokens": 500,
+            "temperature": 0.4,
+            "maxTokens": 200,            # shorter responses = faster generation, less audio to interrupt through
         },
         "voice": {
             "provider": "11labs",
             "voiceId": "21m00Tcm4TlvDq8ikWAM",  # Rachel (ElevenLabs)
-            "stability": 0.5,
-            "similarityBoost": 0.75,
+            "stability": 0.4,
+            "similarityBoost": 0.6,
+            "speed": 1.1,               # slightly faster speech delivery
         },
         "firstMessage": (
-            "Hello! Thanks for calling. I'd like to help you register as a new patient. "
-            "Is that okay?"
+            "Hi, thanks for calling! I can help you register as a new patient. "
+            "What's your first and last name?"
         ),
         "recordingEnabled": True,
+        "silenceTimeoutSeconds": 30,   # keep generous — users may pause to find info
+        "maxDurationSeconds": 300,
+        "responseDelaySeconds": 0,
         "server": {
             "url": webhook_url,  # Vapi sends tool-call + call events here
         },
@@ -77,6 +83,61 @@ def create_assistant(api_key: str, webhook_url: str) -> dict:
         resp.raise_for_status()
         assistant = resp.json()
     logger.info("Assistant created: id=%s", assistant.get("id"))
+    return assistant
+
+
+def update_assistant(api_key: str, assistant_id: str, webhook_url: str) -> dict:
+    """Update an existing Vapi assistant with the current prompt and config."""
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    payload = {
+        "name": "Patient Registration Agent",
+        "transcriber": {
+            "provider": "deepgram",
+            "model": "nova-2",
+            "language": "en-US",
+            "endpointing": 200,          # ms — detect end-of-speech faster for quicker barge-in
+            "profanityFilter": False,
+        },
+        "model": {
+            "provider": "groq",
+            "model": "llama-3.3-70b-versatile",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": SYSTEM_PROMPT,
+                }
+            ],
+            "tools": ALL_TOOLS,
+            "temperature": 0.4,
+            "maxTokens": 200,            # shorter responses = faster generation, less audio to interrupt through
+        },
+        "voice": {
+            "provider": "11labs",
+            "voiceId": "21m00Tcm4TlvDq8ikWAM",
+            "stability": 0.4,
+            "similarityBoost": 0.6,
+            "speed": 1.1,               # slightly faster speech delivery
+        },
+        "firstMessage": (
+            "Hi, thanks for calling! I can help you register as a new patient. "
+            "What's your first and last name?"
+        ),
+        "recordingEnabled": True,
+        "silenceTimeoutSeconds": 30,   # keep generous — users may pause to find info
+        "maxDurationSeconds": 300,
+        "responseDelaySeconds": 0,
+        "server": {
+            "url": webhook_url,
+        },
+    }
+
+    logger.info("Updating Vapi assistant %s...", assistant_id)
+    with httpx.Client(timeout=30) as client:
+        resp = client.patch(f"{VAPI_BASE}/assistant/{assistant_id}", headers=headers, json=payload)
+        resp.raise_for_status()
+        assistant = resp.json()
+    logger.info("Assistant updated: id=%s", assistant.get("id"))
     return assistant
 
 
@@ -114,6 +175,21 @@ def main() -> None:
 
     webhook_url = f"{settings.public_base_url}/vapi/webhook"
     logger.info("Webhook URL: %s", webhook_url)
+
+    # If VAPI_ASSISTANT_ID is set, update the existing assistant instead of creating a new one
+    if settings.vapi_assistant_id:
+        logger.info("VAPI_ASSISTANT_ID is set — updating existing assistant...")
+        try:
+            assistant = update_assistant(settings.vapi_api_key, settings.vapi_assistant_id, webhook_url)
+            print(f"\n✅ Assistant updated: {assistant['id']}")
+            print("   The phone number linked to this assistant now uses the updated prompt.")
+        except httpx.HTTPStatusError as e:
+            logger.error("Vapi API error: %s - %s", e.response.status_code, e.response.text)
+            sys.exit(1)
+        except Exception as e:
+            logger.error("Unexpected error: %s", e)
+            sys.exit(1)
+        return
 
     try:
         assistant = create_assistant(settings.vapi_api_key, webhook_url)

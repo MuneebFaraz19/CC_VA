@@ -1,0 +1,47 @@
+Subject: Voice AI Agent Coding Challenge — Submission
+
+Hi,
+
+I've completed the Voice AI Agent coding challenge. Below is a summary of what I built and how to test it.
+
+What I built:
+
+A voice-based AI agent accessible via a real phone number that collects U.S. patient demographic information through natural conversation, persists it to a database, and exposes it through a REST API with a web dashboard.
+
+Live phone number: +1 (802) 636-9603
+
+How it works:
+
+The caller dials the number. Vapi handles telephony, speech-to-text (Deepgram), and text-to-speech (ElevenLabs). The agent, powered by Groq Llama 3.3 70B, conducts a conversational intake — collecting fields one or two at a time and confirming before saving. Tool calls from the agent hit my FastAPI backend via webhook, where data is validated and persisted to SQLite. All call transcripts and summaries are logged for review.
+
+Tech stack:
+- Telephony and voice: Vapi (Deepgram STT, ElevenLabs TTS)
+- LLM: Groq, Llama 3.3 70B Versatile
+- Backend: Python FastAPI with SQLAlchemy
+- Database: SQLite (persistent disk on Render)
+- Deployment: Render
+
+Core requirements met:
+- Conversational voice agent (not IVR) with natural back-and-forth dialogue
+- Collects all 16 required patient fields with validation
+- Reads back and confirms all information before saving
+- Handles corrections and invalid data with re-prompts
+- REST API with full CRUD for patients
+- Call transcript and summary logging
+- Consistent JSON response envelope
+- Deployed and accessible via a real phone number
+
+Bonus features:
+- Duplicate detection — the agent recognizes returning callers by phone number and offers to update existing records
+- Web dashboard showing registered patients, call history, and transcripts
+- Appointment scheduling — the agent offers to schedule a first appointment after registration
+- Automated test suite — 46 tests covering API CRUD, input validation, webhook handling, and appointment scheduling, all passing
+
+Repository: https://github.com/MuneebFaraz19/CC_VA (private, happy to grant access)
+
+To test it, just call +1 (802) 636-9603 and the agent will guide you through patient registration. The repo README has instructions for accessing the dashboard.
+
+Happy to walk through the implementation or answer any questions.
+
+Best,
+Muneeb Faraz
