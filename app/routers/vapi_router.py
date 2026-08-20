@@ -63,11 +63,32 @@ def _extract_tool_call(body: dict) -> Optional[dict]:
 
 
 def _extract_call_info(body: dict) -> dict:
-    """Extract call-level metadata from the Vapi payload."""
-    call = body.get("call", {})
+    """Extract call-level metadata from the Vapi payload.
+
+    Vapi sends call info in different places depending on event type:
+    - body.call.id  (some events)
+    - body.message.call.id  (newer format)
+    - body.callId  (legacy)
+    """
+    call = body.get("call", {}) or {}
+    msg = body.get("message", {}) or {}
+    msg_call = msg.get("call", {}) or {}
+
+    vapi_call_id = (
+        call.get("id")
+        or msg_call.get("id")
+        or body.get("callId")
+        or msg.get("callId")
+    )
+    caller_phone = (
+        call.get("customer", {}).get("number")
+        or msg_call.get("customer", {}).get("number")
+        or body.get("customerNumber")
+        or msg.get("customerNumber")
+    )
     return {
-        "vapi_call_id": call.get("id") or body.get("callId"),
-        "caller_phone": call.get("customer", {}).get("number") or body.get("customerNumber"),
+        "vapi_call_id": vapi_call_id,
+        "caller_phone": caller_phone,
     }
 
 
@@ -76,10 +97,14 @@ async def vapi_webhook(request: Request, db: Session = Depends(get_db)):
     """
     Receives webhook events from Vapi.
 
-    Key event types:
-    - tool_call: The LLM wants to call registerPatient / updatePatient / scheduleAppointment
+    Key event types from Vapi:
+    - assistant.started: Call started (Vapi's newer event name)
+    - call-start: Call started (legacy event name)
+    - status-update: Mid-call status, may include tool calls
+    - speech-update: Speech started/stopped events
+    - conversation-update: Conversation messages so far
     - end-of-call-report: Call finished, includes transcript + summary
-    - call-start: Call started
+    - tool_call: The LLM wants to call registerPatient / updatePatient / scheduleAppointment
     """
     try:
         body = await request.json()
@@ -105,10 +130,22 @@ async def vapi_webhook(request: Request, db: Session = Depends(get_db)):
 
     msg_type = body.get("message", {}).get("type") or body.get("type", "")
 
-    # ── Call started ─────────────────────────────────
-    if msg_type == "call-start":
+    logger.info("Webhook event type: %s", msg_type)
+
+    # ── Call started (Vapi sends 'assistant.started' or 'call-start') ──
+    if msg_type in ("call-start", "assistant.started"):
         info = _extract_call_info(body)
         call_svc = CallService(db)
+        # Avoid duplicate if we already have this vapi_call_id
+        if info["vapi_call_id"]:
+            from sqlalchemy import select
+            from app.models import CallLog
+            existing = db.execute(
+                select(CallLog).where(CallLog.vapi_call_id == info["vapi_call_id"])
+            ).scalars().first()
+            if existing:
+                logger.info("Call already logged: vapi_call_id=%s", info["vapi_call_id"])
+                return _ok({"call_id": existing.call_id, "message": "Call already logged"})
         call = call_svc.create_call(
             vapi_call_id=info["vapi_call_id"],
             caller_phone=info["caller_phone"],
@@ -117,20 +154,38 @@ async def vapi_webhook(request: Request, db: Session = Depends(get_db)):
         return _ok({"call_id": call.call_id, "message": "Call logged"})
 
     # ── End-of-call report ───────────────────────────
-    if msg_type == "end-of-call-report":
+    if msg_type in ("end-of-call-report", "end-of-call"):
         info = _extract_call_info(body)
         call_svc = CallService(db)
-        # Find existing call by vapi_call_id or create one
         vapi_id = info["vapi_call_id"]
-        # Vapi nests transcript/summary under message, with fallback to top-level
         msg = body.get("message", {})
+
+        # Try to get transcript/summary from multiple possible locations
         transcript = msg.get("transcript") or body.get("transcript", "")
         summary = msg.get("summary") or body.get("summary", "")
-        # Vapi may also send artifact or ordered transcripts
+
+        # Vapi may send artifact with ordered messages instead of a flat transcript
         if not transcript:
             artifact = body.get("artifact") or msg.get("artifact")
             if artifact and isinstance(artifact, dict):
                 transcript = artifact.get("transcript", "")
+                summary = summary or artifact.get("summary", "")
+                # Build transcript from messages array if no flat transcript
+                if not transcript:
+                    messages = artifact.get("messages", [])
+                    parts = []
+                    for m in messages:
+                        role = m.get("role", "")
+                        text = m.get("message") or m.get("content", "")
+                        if role == "bot" or role == "assistant":
+                            parts.append(f"Agent: {text}")
+                        elif role == "user":
+                            parts.append(f"Caller: {text}")
+                    if parts:
+                        transcript = "\n".join(parts)
+
+        logger.info("End-of-call: vapi_call_id=%s, transcript_len=%d", vapi_id, len(transcript or ""))
+
         # Try to find the call
         from sqlalchemy import select
         from app.models import CallLog
