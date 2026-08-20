@@ -15,7 +15,7 @@ FastAPI Backend (Python)
     ├── /calls            ← call transcripts/logs
     └── / (dashboard)     ← web UI
     ↕
-PostgreSQL Database (Render Postgres — persistent across restarts)
+SQLite Database (persistent)
 ```
 
 ### Tech Stack & Justification
@@ -25,8 +25,8 @@ PostgreSQL Database (Render Postgres — persistent across restarts)
 | **Telephony + Voice** | Vapi | Abstracts STT/TTS/telephony — fastest path to a working voice agent. Handles phone number provisioning, speech-to-text (Deepgram), text-to-speech (ElevenLabs), and orchestrates the LLM. |
 | **LLM** | Groq (Llama 3.3 70B) | Fast inference, good conversational quality, free tier available. Used as Vapi's model provider. |
 | **Backend** | Python FastAPI | Async, fast, excellent validation via Pydantic, automatic OpenAPI docs. |
-| **Database** | PostgreSQL (Render Postgres) | Persistent across restarts. SQLite used for local dev (auto-detected from `DATABASE_URL`). |
-| **Hosting** | Render | Simple cloud deployment with managed PostgreSQL. |
+| **Database** | SQLite | Zero-config, file-based, perfect for a 3-hour challenge. Easily swappable to PostgreSQL. |
+| **Hosting** | Render | Simple cloud deployment with persistent disk for SQLite. |
 
 ## Quick Start
 
@@ -77,7 +77,7 @@ This will print the phone number to call and the IDs to add to your `.env`.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `DATABASE_URL` | No | Database URL. SQLite for local dev (`sqlite:///./patients.db`), PostgreSQL for production (`postgresql://...`) |
+| `DATABASE_URL` | No | SQLite path (default: `sqlite:///./patients.db`) |
 | `GROQ_API_KEY` | Yes | Groq API key for the LLM |
 | `GROQ_MODEL` | No | Model name (default: `llama-3.3-70b-versatile`) |
 | `VAPI_API_KEY` | Yes | Vapi API key for telephony |
@@ -144,13 +144,10 @@ The system prompt is in [`app/voice_prompt.py`](app/voice_prompt.py). It instruc
 ## Bonus Features Implemented
 
 - ✅ **Duplicate Detection** — Agent recognizes returning callers by phone number and offers to update
-- ✅ **Dashboard UI** — Redesigned web dashboard with dark sidebar, stat cards, patient cards grid, call history, and transcript modal with chat-style bubbles
+- ✅ **Dashboard UI** — Web dashboard at `/` showing patients, call history, and transcripts
 - ✅ **Call Transcript Logging** — Every call's transcript and summary stored in the database
 - ✅ **Appointment Scheduling** — Agent can schedule a first appointment after registration
 - ✅ **Automated Tests** — 40+ tests covering API CRUD, validation, webhook, and appointments
-- ✅ **PostgreSQL Production DB** — Persistent storage via Render Postgres (survives restarts)
-- ✅ **Barge-in Responsiveness** — Tuned endpointing (200ms), max tokens (200), voice speed (1.1x) for natural conversation flow
-- ✅ **Vapi Webhook Event Handling** — Handles `assistant.started`, `end-of-call`, and tool call events with deduplication
 
 ## Running Tests
 
@@ -160,40 +157,15 @@ pytest -v
 
 ## Deployment (Render)
 
-### Database Setup
-
-1. Create a PostgreSQL database on Render (dashboard → New → PostgreSQL)
-2. Copy the **Internal Database URL** connection string
-3. Set it as the `DATABASE_URL` environment variable in your web service
-
-> **Important:** Render's free tier does NOT support persistent disks. SQLite stored
-> in the container filesystem will be wiped on every redeploy/cold start. Using
-> Render Postgres ensures your data survives restarts.
-
-### Web Service Setup
-
 1. Push this repo to GitHub
 2. Create a new Web Service on [Render](https://render.com)
 3. Set build command: `pip install -r requirements.txt`
 4. Set start command: `uvicorn app.api:app --host 0.0.0.0 --port $PORT`
 5. Add environment variables (see table above)
-6. Set `DATABASE_URL` to your Render Postgres connection string
-7. Set `PUBLIC_BASE_URL` to your Render URL (e.g. `https://cc-va.onrender.com`)
-8. On first deploy, `init_db()` automatically creates all tables in Postgres
+6. Set `PUBLIC_BASE_URL` to your Render URL
+7. Run `python -m app.setup_vapi` to provision the phone number
 
 Alternatively, use the included `render.yaml` for Blueprint deployment.
-
-### Vapi Webhook Configuration
-
-After deploying, update the Vapi assistant webhook URL to point to your Render URL:
-
-```bash
-PUBLIC_BASE_URL=https://cc-va.onrender.com python -m app.setup_vapi
-```
-
-This updates the Vapi assistant with the correct webhook URL and voice agent settings
-(barge-in responsiveness, endpointing, voice speed). The script skips updates when
-`PUBLIC_BASE_URL` contains `localhost` or `127.0.0.1` to avoid overwriting prod config.
 
 ## Project Structure
 

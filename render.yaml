@@ -1,3 +1,8 @@
+databases:
+  - name: cc-va-db
+    databaseName: cc_va
+    user: cc_va_user
+
 services:
   - type: web
     name: voice-ai-patient-registration
@@ -6,7 +11,9 @@ services:
     startCommand: uvicorn app.api:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: cc-va-db
+          property: connectionString
       - key: GROQ_API_KEY
         sync: false
       - key: GROQ_MODEL
