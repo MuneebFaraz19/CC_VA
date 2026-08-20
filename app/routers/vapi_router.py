@@ -37,15 +37,54 @@ def _err(error: str, status_code: int = 400) -> Response:
 
 
 def _parse_dob(raw: str) -> str:
-    """Convert MM/DD/YYYY → YYYY-MM-DD for Pydantic date parsing."""
+    """Convert various date formats → YYYY-MM-DD for Pydantic date parsing."""
     raw = raw.strip()
+
     # Already ISO?
     if re.match(r"^\d{4}-\d{2}-\d{2}$", raw):
         return raw
-    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", raw)
+
+    # MM/DD/YYYY or MM-DD-YYYY or MM.DD.YYYY
+    m = re.match(r"^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})$", raw)
     if m:
         mm, dd, yyyy = m.groups()
         return f"{yyyy}-{int(mm):02d}-{int(dd):02d}"
+
+    # YYYY/MM/DD or YYYY-MM-DD (already handled above for dashes, catch slashes)
+    m = re.match(r"^(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})$", raw)
+    if m:
+        yyyy, mm, dd = m.groups()
+        return f"{yyyy}-{int(mm):02d}-{int(dd):02d}"
+
+    # Month name formats: January 5, 1990 / Jan 5 1990 / 5 January 1990
+    month_names = {
+        "january": 1, "jan": 1, "february": 2, "feb": 2, "march": 3, "mar": 3,
+        "april": 4, "apr": 4, "may": 5, "june": 6, "jun": 6, "july": 7, "jul": 7,
+        "august": 8, "aug": 8, "september": 9, "sep": 9, "sept": 9, "october": 10, "oct": 10,
+        "november": 11, "nov": 11, "december": 12, "dec": 12,
+    }
+    # "January 5, 1990" or "Jan 5 1990"
+    m = re.match(r"^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$", raw)
+    if m:
+        mon_name, dd, yyyy = m.groups()
+        mon_name_lower = mon_name.lower()
+        if mon_name_lower in month_names:
+            return f"{yyyy}-{month_names[mon_name_lower]:02d}-{int(dd):02d}"
+    # "5 January 1990" or "5 Jan 1990"
+    m = re.match(r"^(\d{1,2})\s+([A-Za-z]+),?\s+(\d{4})$", raw)
+    if m:
+        dd, mon_name, yyyy = m.groups()
+        mon_name_lower = mon_name.lower()
+        if mon_name_lower in month_names:
+            return f"{yyyy}-{month_names[mon_name_lower]:02d}-{int(dd):02d}"
+
+    # 2-digit year: MM/DD/YY
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{2})$", raw)
+    if m:
+        mm, dd, yy = m.groups()
+        yyyy = 2000 + int(yy) if int(yy) < 50 else 1900 + int(yy)
+        return f"{yyyy}-{int(mm):02d}-{int(dd):02d}"
+
     raise ValueError(f"Invalid date format: {raw}")
 
 
@@ -301,7 +340,7 @@ def _handle_register(func_args: dict, tool_call_id: str, db: Session, call_info:
             status_code=200,
         )
     except ValueError as e:
-        logger.warning("Validation error in registerPatient: %s", e)
+        logger.warning("Validation error in registerPatient: %s | args were: %s", e, json.dumps(func_args, default=str))
         return Response(
             content=json.dumps({
                 "result": {
@@ -315,7 +354,7 @@ def _handle_register(func_args: dict, tool_call_id: str, db: Session, call_info:
             status_code=200,
         )
     except Exception as e:
-        logger.exception("Error in registerPatient")
+        logger.exception("Error in registerPatient: %s | args were: %s", e, json.dumps(func_args, default=str))
         return Response(
             content=json.dumps({
                 "result": {

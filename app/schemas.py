@@ -41,9 +41,38 @@ class SexEnum(str, Enum):
     decline = "Decline to Answer"
 
 
+# Allow full state names → abbreviation mapping
+STATE_NAME_TO_ABBR = {
+    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
+    "california": "CA", "colorado": "CO", "connecticut": "CT", "delaware": "DE",
+    "florida": "FL", "georgia": "GA", "hawaii": "HI", "idaho": "ID",
+    "illinois": "IL", "indiana": "IN", "iowa": "IA", "kansas": "KS",
+    "kentucky": "KY", "louisiana": "LA", "maine": "ME", "maryland": "MD",
+    "massachusetts": "MA", "michigan": "MI", "minnesota": "MN", "mississippi": "MS",
+    "missouri": "MO", "montana": "MT", "nebraska": "NE", "nevada": "NV",
+    "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY",
+    "north carolina": "NC", "north dakota": "ND", "ohio": "OH", "oklahoma": "OK",
+    "oregon": "OR", "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC",
+    "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT",
+    "vermont": "VT", "virginia": "VA", "washington": "WA", "west virginia": "WV",
+    "wisconsin": "WI", "wyoming": "WY", "district of columbia": "DC",
+}
+
+# Allow flexible sex input
+SEX_ALIASES = {
+    "m": "Male", "male": "Male", "man": "Male",
+    "f": "Female", "female": "Female", "woman": "Female",
+    "o": "Other", "other": "Other",
+    "d": "Decline to Answer", "decline": "Decline to Answer",
+    "decline to answer": "Decline to Answer", "prefer not to say": "Decline to Answer",
+    "n/a": "Decline to Answer", "na": "Decline to Answer",
+}
+
+
 # ── Patient schemas ──────────────────────────────────
 class PatientBase(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    # extra=ignore so LLM passing unexpected fields doesn't cause a validation error
+    model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
 
     first_name: str = Field(..., min_length=1, max_length=50)
     last_name: str = Field(..., min_length=1, max_length=50)
@@ -82,9 +111,12 @@ class PatientBase(BaseModel):
     @field_validator("sex")
     @classmethod
     def validate_sex(cls, v: str) -> str:
-        if v not in VALID_SEX:
-            raise ValueError(f"Sex must be one of: {', '.join(sorted(VALID_SEX))}")
-        return v
+        v_lower = v.strip().lower()
+        if v in VALID_SEX:
+            return v
+        if v_lower in SEX_ALIASES:
+            return SEX_ALIASES[v_lower]
+        raise ValueError(f"Sex must be one of: {', '.join(sorted(VALID_SEX))}")
 
     @field_validator("phone_number")
     @classmethod
@@ -97,14 +129,24 @@ class PatientBase(BaseModel):
     @field_validator("state")
     @classmethod
     def validate_state(cls, v: str) -> str:
-        v = v.upper()
-        if v not in VALID_STATES:
-            raise ValueError("State must be a valid 2-letter US state abbreviation")
-        return v
+        v_stripped = v.strip()
+        v_upper = v_stripped.upper()
+        # Already a valid 2-letter abbreviation
+        if v_upper in VALID_STATES:
+            return v_upper
+        # Try full state name
+        v_lower = v_stripped.lower()
+        if v_lower in STATE_NAME_TO_ABBR:
+            return STATE_NAME_TO_ABBR[v_lower]
+        raise ValueError("State must be a valid US state (abbreviation or full name)")
 
     @field_validator("zip_code")
     @classmethod
     def validate_zip(cls, v: str) -> str:
+        # Extract just the first 5 digits if LLM sent something extra
+        digits = re.sub(r"\D", "", v)
+        if len(digits) >= 5:
+            return digits[:5]
         if not ZIP_RE.match(v):
             raise ValueError("ZIP code must be 5-digit or ZIP+4 format (e.g. 12345 or 12345-6789)")
         return v
@@ -126,7 +168,7 @@ class PatientCreate(PatientBase):
 
 class PatientUpdate(BaseModel):
     """Partial update — all fields optional."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
 
     first_name: Optional[str] = Field(None, min_length=1, max_length=50)
     last_name: Optional[str] = Field(None, min_length=1, max_length=50)
@@ -170,9 +212,12 @@ class PatientUpdate(BaseModel):
     def validate_sex(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return None
-        if v not in VALID_SEX:
-            raise ValueError(f"Sex must be one of: {', '.join(sorted(VALID_SEX))}")
-        return v
+        v_lower = v.strip().lower()
+        if v in VALID_SEX:
+            return v
+        if v_lower in SEX_ALIASES:
+            return SEX_ALIASES[v_lower]
+        raise ValueError(f"Sex must be one of: {', '.join(sorted(VALID_SEX))}")
 
     @field_validator("phone_number")
     @classmethod
@@ -189,16 +234,23 @@ class PatientUpdate(BaseModel):
     def validate_state(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return None
-        v = v.upper()
-        if v not in VALID_STATES:
-            raise ValueError("State must be a valid 2-letter US state abbreviation")
-        return v
+        v_stripped = v.strip()
+        v_upper = v_stripped.upper()
+        if v_upper in VALID_STATES:
+            return v_upper
+        v_lower = v_stripped.lower()
+        if v_lower in STATE_NAME_TO_ABBR:
+            return STATE_NAME_TO_ABBR[v_lower]
+        raise ValueError("State must be a valid US state (abbreviation or full name)")
 
     @field_validator("zip_code")
     @classmethod
     def validate_zip(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return None
+        digits = re.sub(r"\D", "", v)
+        if len(digits) >= 5:
+            return digits[:5]
         if not ZIP_RE.match(v):
             raise ValueError("ZIP code must be 5-digit or ZIP+4 format")
         return v
