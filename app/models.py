@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from sqlalchemy import (
     Column, String, Date, DateTime, Text, Boolean, ForeignKey, Index
 )
-from sqlalchemy.dialects.sqlite import JSON
+from sqlalchemy import JSON
 from sqlalchemy.orm import relationship
 
 from app.database import Base
