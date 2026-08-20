@@ -88,14 +88,69 @@ def _parse_dob(raw: str) -> str:
     raise ValueError(f"Invalid date format: {raw}")
 
 
+def _vapi_result(func_name: str, tool_call_id: str, result_data: dict) -> Response:
+    """Build a Vapi-compliant tool-call response.
+
+    Vapi expects: {"results": [{"name": "...", "toolCallId": "...", "result": "<json string>"}]}
+    The `result` field MUST be a JSON-encoded string, not an object.
+    """
+    return Response(
+        content=json.dumps({
+            "results": [
+                {
+                    "name": func_name,
+                    "toolCallId": tool_call_id,
+                    "result": json.dumps(result_data),
+                }
+            ]
+        }),
+        media_type="application/json",
+        status_code=200,
+    )
+
+
 def _extract_tool_call(body: dict) -> Optional[dict]:
-    """Extract the tool call from a Vapi webhook payload."""
-    # Vapi sends tool calls in message.toolCalls
+    """Extract the tool call from a Vapi webhook payload.
+
+    Vapi sends tool calls in several formats depending on API version:
+    - message.toolWithToolCallList[].toolCall  (newest)
+    - message.toolCallList[]  (newer)
+    - message.toolCalls[]  (legacy)
+    """
     msg = body.get("message", {})
+
+    # Newest: toolWithToolCallList
+    tool_with_list = msg.get("toolWithToolCallList") or []
+    if tool_with_list:
+        entry = tool_with_list[0]
+        tool_call = entry.get("toolCall", {})
+        # Build a normalized structure our handlers expect
+        return {
+            "id": tool_call.get("id", ""),
+            "function": {
+                "name": entry.get("name", ""),
+                "arguments": json.dumps(tool_call.get("parameters", {})),
+            },
+        }
+
+    # Newer: toolCallList
+    tool_call_list = msg.get("toolCallList") or []
+    if tool_call_list:
+        entry = tool_call_list[0]
+        return {
+            "id": entry.get("id", ""),
+            "function": {
+                "name": entry.get("name", ""),
+                "arguments": json.dumps(entry.get("parameters", {})),
+            },
+        }
+
+    # Legacy: toolCalls
     tool_calls = msg.get("toolCalls") or msg.get("tool_calls") or []
     if tool_calls:
         return tool_calls[0]
-    # Some payloads nest differently
+
+    # Fallback
     if "toolCall" in body:
         return body["toolCall"]
     return None
@@ -286,22 +341,16 @@ def _handle_register(func_args: dict, tool_call_id: str, db: Session, call_info:
         patient_svc = PatientService(db)
         existing = patient_svc.get_by_phone(phone)
         if existing:
-            return Response(
-                content=json.dumps({
-                    "result": {
-                        "status": "duplicate",
-                        "patient_id": existing.patient_id,
-                        "first_name": existing.first_name,
-                        "last_name": existing.last_name,
-                        "message": f"A patient with this phone number already exists: "
-                                   f"{existing.first_name} {existing.last_name}. "
-                                   f"Ask the caller if they want to update instead.",
-                    },
-                    "toolCallId": tool_call_id,
-                }),
-                media_type="application/json",
-                status_code=200,
-            )
+            logger.info("Duplicate patient detected: %s", existing.patient_id)
+            return _vapi_result("registerPatient", tool_call_id, {
+                "status": "duplicate",
+                "patient_id": existing.patient_id,
+                "first_name": existing.first_name,
+                "last_name": existing.last_name,
+                "message": f"A patient with this phone number already exists: "
+                           f"{existing.first_name} {existing.last_name}. "
+                           f"Ask the caller if they want to update instead.",
+            })
 
         # Validate and create
         data = PatientCreate(**func_args)
@@ -326,47 +375,26 @@ def _handle_register(func_args: dict, tool_call_id: str, db: Session, call_info:
             "phone_number": patient.phone_number,
         }))
 
-        return Response(
-            content=json.dumps({
-                "result": {
-                    "status": "success",
-                    "patient_id": patient.patient_id,
-                    "message": f"Patient {patient.first_name} {patient.last_name} "
-                               f"registered successfully.",
-                },
-                "toolCallId": tool_call_id,
-            }),
-            media_type="application/json",
-            status_code=200,
-        )
+        return _vapi_result("registerPatient", tool_call_id, {
+            "status": "success",
+            "patient_id": patient.patient_id,
+            "message": f"Patient {patient.first_name} {patient.last_name} "
+                       f"registered successfully.",
+        })
     except ValueError as e:
         logger.warning("Validation error in registerPatient: %s | args were: %s", e, json.dumps(func_args, default=str))
-        return Response(
-            content=json.dumps({
-                "result": {
-                    "status": "validation_error",
-                    "message": f"I couldn't save the information because: {e}. "
-                               f"Please ask the caller to correct this and try again.",
-                },
-                "toolCallId": tool_call_id,
-            }),
-            media_type="application/json",
-            status_code=200,
-        )
+        return _vapi_result("registerPatient", tool_call_id, {
+            "status": "validation_error",
+            "message": f"I couldn't save the information because: {e}. "
+                       f"Please ask the caller to correct this and try again.",
+        })
     except Exception as e:
         logger.exception("Error in registerPatient: %s | args were: %s", e, json.dumps(func_args, default=str))
-        return Response(
-            content=json.dumps({
-                "result": {
-                    "status": "error",
-                    "message": "There was a problem saving the patient information. "
-                               "Please ask the caller to try again later.",
-                },
-                "toolCallId": tool_call_id,
-            }),
-            media_type="application/json",
-            status_code=200,
-        )
+        return _vapi_result("registerPatient", tool_call_id, {
+            "status": "error",
+            "message": "There was a problem saving the patient information. "
+                       "Please ask the caller to try again later.",
+        })
 
 
 def _handle_update(func_args: dict, tool_call_id: str, db: Session) -> Response:
@@ -386,51 +414,29 @@ def _handle_update(func_args: dict, tool_call_id: str, db: Session) -> Response:
         patient_svc = PatientService(db)
         patient = patient_svc.update_patient(patient_id, data)
         if not patient:
-            return Response(
-                content=json.dumps({
-                    "result": {"status": "error", "message": "Patient not found."},
-                    "toolCallId": tool_call_id,
-                }),
-                media_type="application/json",
-                status_code=200,
-            )
+            return _vapi_result("updatePatient", tool_call_id, {
+                "status": "error",
+                "message": "Patient not found.",
+            })
 
         logger.info("Patient updated via voice agent: %s", patient_id)
-        return Response(
-            content=json.dumps({
-                "result": {
-                    "status": "success",
-                    "patient_id": patient.patient_id,
-                    "message": f"Patient information updated successfully.",
-                },
-                "toolCallId": tool_call_id,
-            }),
-            media_type="application/json",
-            status_code=200,
-        )
+        return _vapi_result("updatePatient", tool_call_id, {
+            "status": "success",
+            "patient_id": patient.patient_id,
+            "message": "Patient information updated successfully.",
+        })
     except ValueError as e:
         logger.warning("Validation error in updatePatient: %s", e)
-        return Response(
-            content=json.dumps({
-                "result": {
-                    "status": "validation_error",
-                    "message": f"Validation error: {e}. Please correct and try again.",
-                },
-                "toolCallId": tool_call_id,
-            }),
-            media_type="application/json",
-            status_code=200,
-        )
+        return _vapi_result("updatePatient", tool_call_id, {
+            "status": "validation_error",
+            "message": f"Validation error: {e}. Please correct and try again.",
+        })
     except Exception as e:
         logger.exception("Error in updatePatient")
-        return Response(
-            content=json.dumps({
-                "result": {"status": "error", "message": "Update failed. Please try again."},
-                "toolCallId": tool_call_id,
-            }),
-            media_type="application/json",
-            status_code=200,
-        )
+        return _vapi_result("updatePatient", tool_call_id, {
+            "status": "error",
+            "message": "Update failed. Please try again.",
+        })
 
 
 def _handle_schedule(func_args: dict, tool_call_id: str, db: Session) -> Response:
@@ -453,26 +459,15 @@ def _handle_schedule(func_args: dict, tool_call_id: str, db: Session) -> Respons
         appt = appt_svc.create(patient_id, appt_data)
 
         logger.info("Appointment scheduled for patient %s on %s", patient_id, scheduled)
-        return Response(
-            content=json.dumps({
-                "result": {
-                    "status": "success",
-                    "appointment_id": appt.appointment_id,
-                    "message": f"Appointment scheduled with {appt.provider_name} "
-                               f"on {scheduled.strftime('%B %d, %Y at %I:%M %p')}.",
-                },
-                "toolCallId": tool_call_id,
-            }),
-            media_type="application/json",
-            status_code=200,
-        )
+        return _vapi_result("scheduleAppointment", tool_call_id, {
+            "status": "success",
+            "appointment_id": appt.appointment_id,
+            "message": f"Appointment scheduled with {appt.provider_name} "
+                       f"on {scheduled.strftime('%B %d, %Y at %I:%M %p')}.",
+        })
     except Exception as e:
         logger.exception("Error in scheduleAppointment")
-        return Response(
-            content=json.dumps({
-                "result": {"status": "error", "message": "Could not schedule appointment."},
-                "toolCallId": tool_call_id,
-            }),
-            media_type="application/json",
-            status_code=200,
-        )
+        return _vapi_result("scheduleAppointment", tool_call_id, {
+            "status": "error",
+            "message": "Could not schedule appointment.",
+        })

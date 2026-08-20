@@ -34,12 +34,18 @@ def _make_tool_call(func_name: str, args: dict) -> dict:
     }
 
 
+def _parse_result(resp) -> dict:
+    """Parse the Vapi tool-call response format: {"results": [{"result": "<json string>"}]}"""
+    data = resp.json()
+    return json.loads(data["results"][0]["result"])
+
+
 class TestRegisterPatientWebhook:
     def test_register_success(self, client):
         body = _make_tool_call("registerPatient", VALID_TOOL_ARGS)
         resp = client.post("/vapi/webhook", json=body)
         assert resp.status_code == 200
-        result = resp.json()["result"]
+        result = _parse_result(resp)
         assert result["status"] == "success"
         assert "patient_id" in result
 
@@ -48,14 +54,14 @@ class TestRegisterPatientWebhook:
         client.post("/vapi/webhook", json=_make_tool_call("registerPatient", VALID_TOOL_ARGS))
         # Second with same phone
         resp = client.post("/vapi/webhook", json=_make_tool_call("registerPatient", VALID_TOOL_ARGS))
-        result = resp.json()["result"]
+        result = _parse_result(resp)
         assert result["status"] == "duplicate"
         assert "patient_id" in result
 
     def test_register_validation_error(self, client):
         args = {**VALID_TOOL_ARGS, "phone_number": "123"}
         resp = client.post("/vapi/webhook", json=_make_tool_call("registerPatient", args))
-        result = resp.json()["result"]
+        result = _parse_result(resp)
         assert result["status"] == "validation_error"
 
     def test_register_with_optional_fields(self, client):
@@ -68,24 +74,24 @@ class TestRegisterPatientWebhook:
             "emergency_contact_phone": "5559876543",
         }
         resp = client.post("/vapi/webhook", json=_make_tool_call("registerPatient", args))
-        assert resp.json()["result"]["status"] == "success"
+        assert _parse_result(resp)["status"] == "success"
 
     def test_dob_iso_format(self, client):
         args = {**VALID_TOOL_ARGS, "date_of_birth": "1990-01-15"}
         resp = client.post("/vapi/webhook", json=_make_tool_call("registerPatient", args))
-        assert resp.json()["result"]["status"] == "success"
+        assert _parse_result(resp)["status"] == "success"
 
 
 class TestUpdatePatientWebhook:
     def test_update_success(self, client):
         # Create first
         create_resp = client.post("/vapi/webhook", json=_make_tool_call("registerPatient", VALID_TOOL_ARGS))
-        patient_id = create_resp.json()["result"]["patient_id"]
+        patient_id = _parse_result(create_resp)["patient_id"]
 
         # Update
         update_args = {"patient_id": patient_id, "email": "updated@example.com"}
         resp = client.post("/vapi/webhook", json=_make_tool_call("updatePatient", update_args))
-        result = resp.json()["result"]
+        result = _parse_result(resp)
         assert result["status"] == "success"
 
 
