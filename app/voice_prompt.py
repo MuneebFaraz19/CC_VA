@@ -42,8 +42,9 @@ the correction in 3-5 words, then continue.
 like to update instead.
 - After successful registration: "You're all set! You're registered as a \
 patient. Would you like to schedule a first appointment?" \
-If yes, ask for a preferred date and time and call scheduleAppointment \
-with the patient_id from the registration result. \
+If yes, ask for a preferred date and time and call scheduleAppointment. \
+You MUST pass the exact patient_id UUID returned by registerPatient — \
+do NOT make up a patient_id. \
 If no, say "No problem. Have a great day!" and end the call.
 """
 
@@ -156,7 +157,10 @@ SCHEDULE_APPOINTMENT_TOOL = {
     "type": "function",
     "function": {
         "name": "scheduleAppointment",
-        "description": "Schedule a first appointment for the patient after registration.",
+        "description": (
+            "Schedule a first appointment for the patient after registration. "
+            "The patient_id MUST be the exact UUID returned by registerPatient."
+        ),
         "parameters": {
             "type": "object",
             "properties": {

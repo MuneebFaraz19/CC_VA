@@ -113,46 +113,73 @@ def _extract_tool_call(body: dict) -> Optional[dict]:
     """Extract the tool call from a Vapi webhook payload.
 
     Vapi sends tool calls in several formats depending on API version:
-    - message.toolWithToolCallList[].toolCall  (newest)
+    - message.toolWithToolCallList[].toolCall  (newest, docs)
     - message.toolCallList[]  (newer)
-    - message.toolCalls[]  (legacy)
+    - message.toolCalls[]  (OpenAI-style, used in call API + some webhooks)
+    - body.toolCall  (fallback)
+
+    The `name` and `arguments` can be in different places:
+    - entry.name + toolCall.parameters  (docs format)
+    - toolCall.function.name + toolCall.function.arguments  (OpenAI format)
+    - entry.name + entry.parameters  (toolCallList format)
     """
     msg = body.get("message", {})
 
-    # Newest: toolWithToolCallList
+    def _build(tc_id: str, name: str, args: Any) -> dict:
+        """Build a normalized tool-call dict in OpenAI format."""
+        if isinstance(args, dict):
+            args = json.dumps(args)
+        if args is None:
+            args = "{}"
+        return {"id": tc_id, "function": {"name": name, "arguments": args}}
+
+    # ── Newest: toolWithToolCallList ──
     tool_with_list = msg.get("toolWithToolCallList") or []
     if tool_with_list:
         entry = tool_with_list[0]
-        tool_call = entry.get("toolCall", {})
-        # Build a normalized structure our handlers expect
-        return {
-            "id": tool_call.get("id", ""),
-            "function": {
-                "name": entry.get("name", ""),
-                "arguments": json.dumps(tool_call.get("parameters", {})),
-            },
-        }
+        tc = entry.get("toolCall", {})
+        # Name can be at entry level (docs) or inside toolCall.function (OpenAI)
+        name = entry.get("name") or tc.get("function", {}).get("name", "")
+        args = tc.get("parameters") or tc.get("function", {}).get("arguments", {})
+        tc_id = tc.get("id", "")
+        if name:
+            return _build(tc_id, name, args)
 
-    # Newer: toolCallList
+    # ── Newer: toolCallList ──
     tool_call_list = msg.get("toolCallList") or []
     if tool_call_list:
         entry = tool_call_list[0]
-        return {
-            "id": entry.get("id", ""),
-            "function": {
-                "name": entry.get("name", ""),
-                "arguments": json.dumps(entry.get("parameters", {})),
-            },
-        }
+        name = entry.get("name") or entry.get("function", {}).get("name", "")
+        args = entry.get("parameters") or entry.get("function", {}).get("arguments", {})
+        tc_id = entry.get("id", "")
+        if name:
+            return _build(tc_id, name, args)
 
-    # Legacy: toolCalls
+    # ── OpenAI-style: toolCalls (inside message) ──
     tool_calls = msg.get("toolCalls") or msg.get("tool_calls") or []
     if tool_calls:
-        return tool_calls[0]
+        entry = tool_calls[0]
+        name = entry.get("function", {}).get("name", "") or entry.get("name", "")
+        args = entry.get("function", {}).get("arguments", {}) or entry.get("parameters", {})
+        tc_id = entry.get("id", "")
+        if name:
+            return _build(tc_id, name, args)
 
-    # Fallback
+    # ── Fallback: top-level toolCall ──
     if "toolCall" in body:
-        return body["toolCall"]
+        tc = body["toolCall"]
+        name = tc.get("function", {}).get("name", "") or tc.get("name", "")
+        args = tc.get("function", {}).get("arguments", {}) or tc.get("parameters", {})
+        tc_id = tc.get("id", "")
+        if name:
+            return _build(tc_id, name, args)
+
+    # Debug: log what we actually received so we can diagnose
+    logger.warning(
+        "Could not extract tool call from message. msg keys: %s. msg (truncated): %s",
+        list(msg.keys()),
+        json.dumps(msg, default=str)[:1000],
+    )
     return None
 
 
@@ -448,7 +475,19 @@ def _handle_schedule(func_args: dict, tool_call_id: str, db: Session) -> Respons
         provider = func_args.get("provider_name", "Dr. Smith")
 
         if not patient_id or not date_str or not time_str:
-            return _err("patient_id, date, and time are required", 400)
+            return _vapi_result("scheduleAppointment", tool_call_id, {
+                "status": "validation_error",
+                "message": "Missing required fields. Need patient_id (UUID from registration), date (YYYY-MM-DD), and time (HH:MM).",
+            })
+
+        # Validate patient exists
+        patient_svc = PatientService(db)
+        patient = patient_svc.get_patient(patient_id)
+        if not patient:
+            return _vapi_result("scheduleAppointment", tool_call_id, {
+                "status": "error",
+                "message": f"Patient not found with ID '{patient_id}'. Use the patient_id returned from registerPatient.",
+            })
 
         dt_str = f"{date_str}T{time_str}:00"
         scheduled = datetime.fromisoformat(dt_str).replace(tzinfo=timezone.utc)
@@ -465,9 +504,15 @@ def _handle_schedule(func_args: dict, tool_call_id: str, db: Session) -> Respons
             "message": f"Appointment scheduled with {appt.provider_name} "
                        f"on {scheduled.strftime('%B %d, %Y at %I:%M %p')}.",
         })
+    except ValueError as e:
+        logger.warning("Validation error in scheduleAppointment: %s", e)
+        return _vapi_result("scheduleAppointment", tool_call_id, {
+            "status": "validation_error",
+            "message": f"I couldn't schedule the appointment because: {e}. Please ask the caller for a future date and time.",
+        })
     except Exception as e:
         logger.exception("Error in scheduleAppointment")
         return _vapi_result("scheduleAppointment", tool_call_id, {
             "status": "error",
-            "message": "Could not schedule appointment.",
+            "message": "Could not schedule appointment. Please try again.",
         })
