@@ -151,6 +151,11 @@ class AppointmentService:
         stmt = select(Appointment).where(Appointment.patient_id == patient_id)
         return self.db.execute(stmt).scalars().first()
 
+    def list_appointments(self) -> list[Appointment]:
+        """List all appointments, most recent first."""
+        stmt = select(Appointment).order_by(Appointment.scheduled_date.desc())
+        return list(self.db.execute(stmt).scalars().all())
+
     def create(self, patient_id: str, data: AppointmentCreate) -> Appointment:
         existing = self.get_for_patient(patient_id)
         if existing:

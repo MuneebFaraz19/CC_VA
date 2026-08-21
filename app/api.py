@@ -12,7 +12,7 @@ import os
 
 from app.config import get_settings
 from app.database import init_db
-from app.routers import patients_router, calls_router, vapi_router
+from app.routers import patients_router, calls_router, vapi_router, appointments_router
 
 settings = get_settings()
 
@@ -57,6 +57,7 @@ app.add_middleware(
 app.include_router(patients_router.router)
 app.include_router(calls_router.router)
 app.include_router(vapi_router.router)
+app.include_router(appointments_router.router)
 
 
 # ── Health ───────────────────────────────────────────

@@ -94,6 +94,7 @@
         <div class="nav-item active" data-tab="overview"><span class="nav-icon">📊</span> Overview</div>
         <div class="nav-item" data-tab="patients"><span class="nav-icon">👥</span> Patients</div>
         <div class="nav-item" data-tab="calls"><span class="nav-icon">📞</span> Call History</div>
+        <div class="nav-item" data-tab="appointments"><span class="nav-icon">📅</span> Appointments</div>
     </div>
     <div class="main">
         <div class="view active" id="overview-view">
@@ -119,6 +120,11 @@
             <div class="page-header"><h2>Call History</h2><p>All voice calls handled by the AI agent</p></div>
             <div class="card"><div id="calls-list"><div class="loading">Loading...</div></div></div>
         </div>
+        <div class="view" id="appointments-view">
+            <div class="page-header"><h2>Appointments</h2><p>Scheduled appointments for registered patients</p></div>
+            <div class="stats" id="appt-stats"></div>
+            <div class="card"><div id="appointments-list"><div class="loading">Loading...</div></div></div>
+        </div>
     </div>
     <div class="modal-overlay" id="detail-modal"><div class="modal"><h2>Patient Details</h2><div id="detail-content"></div><div class="modal-actions"><button class="btn btn-danger" onclick="deletePatient()">Delete</button><button class="btn btn-outline" onclick="closeModal('detail-modal')">Close</button></div></div></div>
     <div class="modal-overlay" id="add-modal"><div class="modal"><h2 id="add-modal-title">Add New Patient</h2><form id="patient-form" onsubmit="savePatient(event)"><div style="display:grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;"><div class="field"><label>First Name *</label><input name="first_name" required></div><div class="field"><label>Last Name *</label><input name="last_name" required></div><div class="field"><label>Date of Birth *</label><input name="date_of_birth" type="date" required></div><div class="field"><label>Sex *</label><select name="sex" required><option value="">Select...</option><option>Male</option><option>Female</option><option>Other</option><option>Decline to Answer</option></select></div><div class="field"><label>Phone Number *</label><input name="phone_number" required placeholder="5551234567"></div><div class="field"><label>Email</label><input name="email" type="email"></div><div class="field" style="grid-column: span 2;"><label>Address Line 1 *</label><input name="address_line_1" required></div><div class="field" style="grid-column: span 2;"><label>Address Line 2</label><input name="address_line_2"></div><div class="field"><label>City *</label><input name="city" required></div><div class="field"><label>State *</label><input name="state" required placeholder="CA" maxlength="2"></div><div class="field"><label>ZIP Code *</label><input name="zip_code" required placeholder="12345"></div><div class="field"><label>Insurance Provider</label><input name="insurance_provider"></div><div class="field"><label>Insurance Member ID</label><input name="insurance_member_id"></div><div class="field"><label>Preferred Language</label><input name="preferred_language" value="English"></div><div class="field"><label>Emergency Contact Name</label><input name="emergency_contact_name"></div><div class="field"><label>Emergency Contact Phone</label><input name="emergency_contact_phone"></div></div><div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal('add-modal')">Cancel</button><button type="submit" class="btn btn-primary">Save</button></div></form></div></div>
@@ -140,9 +146,11 @@
             document.getElementById('overview-view').classList.toggle('active', tab === 'overview');
             document.getElementById('patients-view').classList.toggle('active', tab === 'patients');
             document.getElementById('calls-view').classList.toggle('active', tab === 'calls');
+            document.getElementById('appointments-view').classList.toggle('active', tab === 'appointments');
             if (tab === 'overview') loadOverview();
             if (tab === 'patients') { loadPatients(); loadPatientStats(); }
             if (tab === 'calls') loadCalls();
+            if (tab === 'appointments') loadAppointments();
         }
         document.querySelectorAll('.nav-item').forEach(t => t.addEventListener('click', () => switchTab(t.dataset.tab)));
         function toast(msg) { const el = document.getElementById('toast'); el.textContent = msg; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 3000); }
@@ -234,6 +242,30 @@
             }
             if (c.collected_data) html += `<div class="field"><label>Collected Data</label><div style="padding:0.75rem;background:var(--bg);border-radius:8px;font-family:monospace;font-size:0.8rem;overflow-x:auto">${JSON.stringify(c.collected_data, null, 2)}</div></div>`;
             document.getElementById('call-content').innerHTML = html; document.getElementById('call-modal').classList.add('active');
+        }
+
+        async function loadAppointments() {
+            const res = await api('/appointments'); const appts = res.data || []; const el = document.getElementById('appointments-list');
+            const statsEl = document.getElementById('appt-stats');
+            const now = new Date();
+            const upcoming = appts.filter(a => new Date(a.scheduled_date) >= now);
+            const past = appts.filter(a => new Date(a.scheduled_date) < now);
+            statsEl.innerHTML = `
+                <div class="stat-card"><div class="stat-icon" style="background:var(--primary-bg);color:var(--primary)">📅</div><div class="label">Total Appointments</div><div class="value">${appts.length}</div></div>
+                <div class="stat-card"><div class="stat-icon" style="background:var(--success-bg);color:var(--success)">⏰</div><div class="label">Upcoming</div><div class="value">${upcoming.length}</div></div>
+                <div class="stat-card"><div class="stat-icon" style="background:var(--warning-bg);color:var(--warning)">✓</div><div class="label">Past</div><div class="value">${past.length}</div></div>`;
+            if (!appts.length) { el.innerHTML = '<div class="empty"><div class="empty-icon">📅</div>No appointments scheduled yet.<br>Appointments are booked via the voice agent after registration.</div>'; return; }
+            el.innerHTML = '<div class="call-list">' + appts.map(a => {
+                const apptDate = new Date(a.scheduled_date);
+                const isUpcoming = apptDate >= now;
+                const bg = isUpcoming ? 'var(--primary-bg)' : 'var(--bg)';
+                const icon = isUpcoming ? '📅' : '✓';
+                const statusBadge = isUpcoming ? 'badge-primary' : 'badge-muted';
+                const statusText = isUpcoming ? 'Upcoming' : 'Completed';
+                const dateStr = apptDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+                const timeStr = apptDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+                return `<div class="call-item" onclick="viewPatient('${a.patient_id}')"><div class="call-avatar" style="background:${bg}">${icon}</div><div class="call-info"><h4>${a.patient_name}</h4><p>📅 ${dateStr} at ${timeStr} · ${a.provider_name} · ${a.department}</p></div><div class="call-meta"><div class="time">${formatPhone(a.patient_phone) || '—'}</div></div><span class="badge ${statusBadge}">${statusText}</span></div>`;
+            }).join('') + '</div>';
         }
 
         loadOverview();
