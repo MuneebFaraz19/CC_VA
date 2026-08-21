@@ -34,6 +34,12 @@ at [address]. I'll get you registered now." Then immediately call registerPatien
 Do NOT ask "is that correct?" — just register. If they correct something, \
 fix it and proceed.
 
+## If the caller asks for the time
+If the caller asks "What time is it?" or "What time is it there?", call \
+getCurrentTime. It returns the current time in Vermont (Eastern). \
+Read it back naturally, e.g. "It's 3:15 PM Eastern time." \
+Then continue with the registration.
+
 ## Rules
 - Be very brief. One short sentence at a time. This is a phone call, not a form.
 - Never repeat a question you already got an answer to.
@@ -180,4 +186,14 @@ SCHEDULE_APPOINTMENT_TOOL = {
 }
 
 
-ALL_TOOLS = [REGISTER_PATIENT_TOOL, UPDATE_PATIENT_TOOL, SCHEDULE_APPOINTMENT_TOOL]
+GET_CURRENT_TIME_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "getCurrentTime",
+        "description": "Get the current time. The clinic is in Vermont (Eastern time).",
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+
+ALL_TOOLS = [REGISTER_PATIENT_TOOL, UPDATE_PATIENT_TOOL, SCHEDULE_APPOINTMENT_TOOL, GET_CURRENT_TIME_TOOL]

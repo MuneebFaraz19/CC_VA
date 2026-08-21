@@ -353,6 +353,10 @@ async def vapi_webhook(request: Request, db: Session = Depends(get_db)):
     if func_name == "scheduleAppointment":
         return _handle_schedule(func_args, tool_call_id, db)
 
+    # ── getCurrentTime ───────────────────────────────
+    if func_name == "getCurrentTime":
+        return _handle_get_current_time(tool_call_id)
+
     return _err(f"Unknown function: {func_name}", 400)
 
 
@@ -422,6 +426,18 @@ def _handle_register(func_args: dict, tool_call_id: str, db: Session, call_info:
             "message": "There was a problem saving the patient information. "
                        "Please ask the caller to try again later.",
         })
+
+
+def _handle_get_current_time(tool_call_id: str) -> Response:
+    """Return the current time in Vermont (Eastern)."""
+    from zoneinfo import ZoneInfo
+    now = datetime.now(ZoneInfo("America/New_York"))
+    time_str = now.strftime("%I:%M %p").lstrip("0")
+    date_str = now.strftime("%A, %B %d")
+    return _vapi_result("getCurrentTime", tool_call_id, {
+        "status": "success",
+        "message": f"It's {time_str} Eastern time on {date_str}.",
+    })
 
 
 def _handle_update(func_args: dict, tool_call_id: str, db: Session) -> Response:
